@@ -284,7 +284,7 @@ def _remove_pixels(masks, pixels_to_remove):
 
 
 def extract_rois(dataset, rois, signal_channel=0, remove_overlap=True,
-                 n_processes=1, demix_channel=None):
+                 n_processes=1, demix_channel=None, df_over_f=True):
     """Extracts imaging data from the current dataset using the
     supplied ROIs file.
 
@@ -306,6 +306,10 @@ def extract_rois(dataset, rois, signal_channel=0, remove_overlap=True,
     demix_channel : int, optional
         Index of channel to demix from the signal channel. If None, do not
         demix signals.
+    df_over_f : bool
+        If True, calculate dF/F by normalizing pixel values from ROI by their time average,
+        otherwise just calculae the mean pixel value of each ROI. The later option is useful
+        if background ROIs need to be subtracted from signal ROIs.
 
     Returns
     ------
@@ -391,11 +395,15 @@ def extract_rois(dataset, rois, signal_channel=0, remove_overlap=True,
     def _data_chunker(cycle, time_averages, channel=0):
         """Takes an aligned_data generator for a single cycle
         and returns df/f of each pixel formatted correctly for extraction"""
-        while True:
-            df_frame = (
-                next(cycle)[..., channel] - time_averages[..., channel]
-            ) / time_averages[..., channel]
-            yield df_frame.flatten()
+        if df_over_f:
+            while True:
+                df_frame = (
+                    next(cycle)[..., channel] - time_averages[..., channel]
+                ) / time_averages[..., channel]
+                yield df_frame.flatten()
+        else:
+            while True:
+                yield next(cycle)[..., channel].flatten()
 
     for cycle_idx, sequence in zip(it.count(), dataset):
 
@@ -490,13 +498,13 @@ def extract_rois(dataset, rois, signal_channel=0, remove_overlap=True,
     signals['rois'] = [roi.todict() for roi in rois]
     timestamp = datetime.strftime(datetime.now(), '%Y-%m-%d-%Hh%Mm%Ss')
     signals['timestamp'] = timestamp
-
+    signals['df_over_f'] = df_over_f
+    
     return signals
-
 
 def save_extracted_signals(dataset, rois, save_path=None, label=None,
                            metadata=None, signal_channel=0,
-                           save_summary=True, **kwargs):
+                           save_summary=True, df_over_f=True, **kwargs):
     """Save extracted signals
 
     Parameters
@@ -520,8 +528,12 @@ def save_extracted_signals(dataset, rois, save_path=None, label=None,
         index or a name in self.channel_names.
     save_summary : boolean
         If True, additionally save a summary of the extracted ROIs.
+    df_over_f : bool
+            If True, calculate dF/F by normalizing pixel values from ROI by their time average,
+            otherwise just calculae the mean pixel value of each ROI. The later option is useful
+            if background ROIs need to be subtracted from signal ROIs.
     kwargs : dict, optional
-        Additional keyword arguments will be pass directly to extract_rois.
+        Additional keyword arguments will be passed directly to extract_rois.
 
     """
 
@@ -533,7 +545,7 @@ def save_extracted_signals(dataset, rois, save_path=None, label=None,
         raise Exception('Cannot save extraction data without a savepath.')
 
     signals = extract_rois(dataset=dataset, rois=rois,
-                           signal_channel=signal_channel, **kwargs)
+                           signal_channel=signal_channel, df_over_f=df_over_f, **kwargs)
 
     if save_summary:
         try:

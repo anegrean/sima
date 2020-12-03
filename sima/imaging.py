@@ -796,7 +796,7 @@ class ImagingDataset(object):
 
     def extract(self, rois=None, signal_channel=0, label=None,
                 remove_overlap=True, n_processes=1, demix_channel=None,
-                save_summary=True):
+                save_summary=True, df_over_f=True):
         """Extracts imaging data from the current dataset using the
         supplied ROIs file.
 
@@ -821,6 +821,11 @@ class ImagingDataset(object):
             or a name in self.channel_names If None, do not demix signals.
         save_summary : bool, optional
             If True, additionally save a summary of the extracted ROIs.
+            
+        df_over_f : bool
+            If True, calculate dF/F by normalizing pixel values from ROI by their time average,
+            otherwise just calculae the mean pixel value of each ROI. The later option is useful
+            if background ROIs need to be subtracted from signal ROIs.
 
         Return
         ------
@@ -866,11 +871,11 @@ class ImagingDataset(object):
             return save_extracted_signals(
                 self, rois, self.savedir, label, signal_channel=signal_channel,
                 remove_overlap=remove_overlap, n_processes=n_processes,
-                demix_channel=demix_channel, save_summary=save_summary
+                demix_channel=demix_channel, save_summary=save_summary, df_over_f=df_over_f
             )
         else:
             return extract_rois(self, rois, signal_channel, remove_overlap,
-                                n_processes, demix_channel)
+                                n_processes, demix_channel, df_over_f)
 
     def save(self, savedir=None):
         """Save the ImagingDataset to a file."""
