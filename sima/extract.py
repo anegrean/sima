@@ -113,6 +113,7 @@ def _roi_extract(inputs):
     # Determine which pixels and ROIs were imaged this frame
     # If none were, just return with all NaNs
     imaged_pixels = np.isfinite(masked_frame)
+ 
     if not np.any(imaged_pixels):
         nan_result = np.empty((n_rois, 1))
         nan_result.fill(np.nan)
@@ -123,8 +124,10 @@ def _roi_extract(inputs):
     if constants['is_overlap']:
         A = constants['A'][imaged_pixels, :]
         # Identify all of the rois that were imaged this frame
-        imaged_rois = np.unique(
-            constants['mask_stack'][:, imaged_pixels].nonzero()[0])
+        imaged_masks = constants['mask_stack'][:, imaged_pixels]
+        # number of valid pixels for each ROI patch        
+        n_valid_pixels = np.count_nonzero(imaged_masks.toarray(), axis = 1)
+        imaged_rois = np.unique(imaged_masks.nonzero()[0])
         if len(imaged_rois) < n_rois:
             A = A.tocsc()[:, imaged_rois].tocsr()
         # First assume ROIs are independent, else fall back to full pseudo-inv
@@ -139,6 +142,8 @@ def _roi_extract(inputs):
         if len(imaged_rois) < n_rois:
             orig_masks = orig_masks.tocsr()[imaged_rois, :].tocsc()
             imaged_masks = imaged_masks.tocsr()[imaged_rois, :].tocsc()
+        # number of valid pixels for each ROI patch
+        n_valid_pixels = np.count_nonzero(imaged_masks.toarray(), axis = 1)
         orig_masks.data **= 2
         imaged_masks.data **= 2
         scale_factor = old_div(
@@ -156,7 +161,7 @@ def _roi_extract(inputs):
         result = put_back_nans(result, imaged_rois, n_rois)
 
     if constants['demixer'] is None:
-        return (frame_idx, result, None)
+        return (frame_idx, result, n_valid_pixels, None)
 
     # Same as 'values' but with the demixed frame data
     demixed_frame = masked_frame + constants['demixer']
@@ -165,7 +170,7 @@ def _roi_extract(inputs):
 
     if len(imaged_rois) < n_rois:
         demixed_result = put_back_nans(demixed_result, imaged_rois, n_rois)
-    return (frame_idx, result, demixed_result)
+    return (frame_idx, result, n_valid_pixels, demixed_result)
 
 
 def _save_extract_summary(signals, save_directory, rois):
@@ -391,6 +396,7 @@ def extract_rois(dataset, rois, signal_channel=0, remove_overlap=True,
         demixer = demixer.flatten().astype('float32')[masked_pixels]
 
     raw_signal = [None] * num_sequences
+    observed_ROI_npix = [None] * num_sequences
 
     def _data_chunker(cycle, time_averages, channel=0):
         """Takes an aligned_data generator for a single cycle
@@ -408,6 +414,7 @@ def extract_rois(dataset, rois, signal_channel=0, remove_overlap=True,
     for cycle_idx, sequence in zip(it.count(), dataset):
 
         signal = np.empty((n_rois, len(sequence)), dtype='float32')
+        _observed_ROI_npix = np.empty((n_rois, len(sequence)), dtype='int')
         if demixer is not None:
             demix = np.empty((n_rois, len(sequence)), dtype='float32')
 
@@ -438,15 +445,17 @@ def extract_rois(dataset, rois, signal_channel=0, remove_overlap=True,
         # Loop over generator and extract signals
         while True:
             try:
-                frame_idx, raw_result, demix_result = next(map_generator)
+                frame_idx, raw_result, n_valid_pixels, demix_result = next(map_generator)
             except StopIteration:
                 break
 
             signal[:, frame_idx] = np.array(raw_result).flatten()
+            _observed_ROI_npix[:, frame_idx] = n_valid_pixels
             if demixer is not None:
                 demix[:, frame_idx] = np.array(demix_result).flatten()
 
         raw_signal[cycle_idx] = signal
+        observed_ROI_npix[cycle_idx] = _observed_ROI_npix
         if demixer is not None:
             demix[np.isinf(demix)] = np.nan
             demixed_signal[cycle_idx] = demix
@@ -478,14 +487,36 @@ def extract_rois(dataset, rois, signal_channel=0, remove_overlap=True,
             final_signals.append(final_cycle_signals)
         return final_signals
 
+    def null_nan_roi_npix(observed_ROI_npix, included_rois, n_rois):
+        """Set number of observed pixels to zero for ROIs that were never
+        imaged or entirely overlapped with other ROIs and were removed.
+
+        """
+        final_signals = []
+        for cycle_signals in signals:
+            signals_idx = 0
+            roi_idx = 0
+            final_cycle_signals = np.empty((n_rois, cycle_signals.shape[1]))
+            zeros_row = np.zeros((1, cycle_signals.shape[1]))
+            while roi_idx < n_rois:
+                if roi_idx in included_rois:
+                    final_cycle_signals[roi_idx] = cycle_signals[signals_idx]
+                    signals_idx += 1
+                else:
+                    final_cycle_signals[roi_idx] = zeros_row
+                roi_idx += 1
+            final_signals.append(final_cycle_signals)
+        return final_signals 
+
     if original_n_rois > n_rois:
-        raw_signal = put_back_nan_rois(
-            raw_signal, rois_to_include, original_n_rois)
+        raw_signal = put_back_nan_rois(raw_signal, rois_to_include, original_n_rois)
+        observed_ROI_npix = null_nan_roi_npix(observed_ROI_npix, included_rois, n_rois)
         if demixer is not None:
             demixed_signal = put_back_nan_rois(
                 demixed_signal, rois_to_include, original_n_rois)
 
-    signals = {'raw': raw_signal}
+    #print([masks[idx].nnz for idx in rois_to_include])
+    signals = {'raw': raw_signal, 'observed_ROI_npix': observed_ROI_npix}
     if demixer is not None:
         signals['demixed_raw'] = demixed_signal
     signals['_masks'] = [masks[idx].tolil() for idx in rois_to_include]
