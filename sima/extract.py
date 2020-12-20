@@ -515,8 +515,10 @@ def extract_rois(dataset, rois, signal_channel=0, remove_overlap=True,
             demixed_signal = put_back_nan_rois(
                 demixed_signal, rois_to_include, original_n_rois)
 
-    #print([masks[idx].nnz for idx in rois_to_include])
-    signals = {'raw': raw_signal, 'observed_ROI_npix': observed_ROI_npix}
+    # number of pixels in ROI mask
+    mask_ROI_npix = [masks[idx].nnz for idx in rois_to_include]
+    
+    signals = {'raw': raw_signal, 'observed_ROI_npix': observed_ROI_npix, 'mask_ROI_npix': mask_ROI_npix}
     if demixer is not None:
         signals['demixed_raw'] = demixed_signal
     signals['_masks'] = [masks[idx].tolil() for idx in rois_to_include]
